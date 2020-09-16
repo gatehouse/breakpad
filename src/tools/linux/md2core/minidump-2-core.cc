@@ -101,6 +101,8 @@ static const MDRVA kInvalidMDRVA = static_cast<MDRVA>(-1);
 struct Options {
   string minidump_path;
   bool verbose;
+  bool dump_environ = false;
+  bool dump_miscinfo = false;
   int out_fd;
   bool use_filename;
   bool inc_guid;
@@ -125,6 +127,8 @@ Usage(int argc, const char* argv[]) {
           "\n"
           "Options:\n"
           "  -v         Enable verbose output\n"
+          "  -e         Dump environment to stdout\n"
+          "  -m         Dump miscinfo to stdout\n"
           "  -o <file>  Write coredump to specified file (otherwise use stdout).\n"
           "  -f         Use the filename rather than the soname in the sharedlib list.\n"
           "             The soname is what the runtime system uses, but the filename is\n"
@@ -149,7 +153,7 @@ SetupOptions(int argc, const char* argv[], Options* options) {
   options->use_filename = false;
   options->inc_guid = false;
 
-  while ((ch = getopt(argc, (char * const*)argv, "fhio:S:v")) != -1) {
+  while ((ch = getopt(argc, (char * const *)argv, "fhio:S:vem")) != -1) {
     switch (ch) {
       case 'h':
         Usage(argc, argv);
@@ -174,6 +178,12 @@ SetupOptions(int argc, const char* argv[], Options* options) {
         break;
       case 'v':
         options->verbose = true;
+        break;
+      case 'e':
+        options->dump_environ = true;
+        break;
+      case 'm':
+        options->dump_miscinfo = true;
         break;
     }
   }
@@ -753,7 +763,7 @@ ParseMaps(const Options& options, CrashedProcess* crashinfo,
 static void
 ParseEnvironment(const Options& options, CrashedProcess* crashinfo,
                  const MinidumpMemoryRange& range) {
-  if (options.verbose) {
+  if (options.verbose || options.dump_environ) {
     fputs("MD_LINUX_ENVIRON:\n", stderr);
     char* env = new char[range.length()];
     memcpy(env, range.data(), range.length());
@@ -1020,6 +1030,21 @@ ParseModuleStream(const Options& options, CrashedProcess* crashinfo,
 }
 
 static void
+ParseMiscInfoStream(const Options& options, CrashedProcess* crashinfo,
+		    const MinidumpMemoryRange& range) {
+  const MDRawMiscInfo* exp = range.GetData<MDRawMiscInfo>(0);
+  fprintf(stderr, "Build info: ");
+  auto p = exp->build_string;
+  int i = 0;
+  while (p[i]) {
+    fprintf(stderr, "%c", (char) p[i]);
+    ++i;
+  }
+  fprintf(stderr, "\n");
+}
+
+
+static void
 AddDataToMapping(CrashedProcess* crashinfo, const string& data,
                  uintptr_t addr) {
   for (std::map<uint64_t, CrashedProcess::Mapping>::iterator
@@ -1276,10 +1301,14 @@ main(int argc, const char* argv[]) {
       case MD_EXCEPTION_STREAM:
         ParseExceptionStream(options, &crashinfo,
                              dump.Subrange(dirent->location));
+	printf("Exception code %d\n", crashinfo.fatal_signal);
         break;
       case MD_MODULE_LIST_STREAM:
         ParseModuleStream(options, &crashinfo, dump.Subrange(dirent->location),
                           dump);
+        break;
+      case MD_MISC_INFO_STREAM:
+        ParseMiscInfoStream(options, &crashinfo, dump.Subrange(dirent->location));
         break;
       default:
         if (options.verbose)
